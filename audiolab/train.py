@@ -108,7 +108,7 @@ def main():
     write_json(args.run_dir / "config.json", cfg)
     try:
         train(cfg, args.run_dir)
-    except Exception as exc:
+    except BaseException as exc:  # also Ctrl-C / Colab "interrupt", so the run never looks alive
         status_path = args.run_dir / "status.json"
         status = json.loads(status_path.read_text()) if status_path.exists() else {}
         status.update(state="failed", error=f"{type(exc).__name__}: {exc}")

@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RUNS, REPORTS = ROOT / "runs", ROOT / "reports"
 BASE_CONFIG = ROOT / "configs" / "baseline.json"
+STALE_SECONDS = 15 * 60
 
 ALLOWED = {  # key: (type, min, max) or (type, choices)
     "lr": (float, 1e-5, 1e-2),
@@ -51,7 +52,10 @@ class Session:
             return self.procs[run_dir.name].poll() is None
         pid_file = run_dir / "pid"
         if not pid_file.exists():
-            return True  # e.g. a baseline started by hand; trust status.json
+            # e.g. a baseline started by hand: trust status.json unless it has gone stale
+            # (training rewrites it every log interval; evaluation takes a few minutes)
+            status_file = run_dir / "status.json"
+            return not status_file.exists() or time.time() - status_file.stat().st_mtime < STALE_SECONDS
         try:
             os.kill(int(pid_file.read_text()), 0)
             return True
