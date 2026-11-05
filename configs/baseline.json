@@ -1,0 +1,16 @@
+{
+  "data_dir": "data/vb16k",
+  "sample_rate": 16000,
+  "n_fft": 512,
+  "hop": 128,
+  "hidden": 256,
+  "layers": 2,
+  "lr": 0.001,
+  "batch_size": 16,
+  "crop_seconds": 2.0,
+  "steps": 3000,
+  "grad_clip": 5.0,
+  "log_every": 50,
+  "eval_files": 200,
+  "seed": 0
+}
