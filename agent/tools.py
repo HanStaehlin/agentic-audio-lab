@@ -24,12 +24,16 @@ ALLOWED = {  # key: (type, min, max) or (type, choices)
     "hidden": (int, 32, 512),
     "layers": (int, 1, 4),
     "batch_size": (int, 4, 64),
-    "steps": (int, 100, 20000),
+    "steps": (int, 100, 30000),
     "crop_seconds": (float, 0.5, 4.0),
     "n_fft": (int, [128, 256, 512, 1024]),  # window = algorithmic latency: 8 / 16 / 32 / 64 ms at 16 kHz
     "hop": (int, [32, 64, 128, 256]),
     "grad_clip": (float, 0.1, 100.0),
     "seed": (int, 0, 99),
+    # training objective and schedule (do not change inference cost)
+    "spec_weight": (float, 0.0, 1000.0),  # weight of the compressed multi-resolution spectral loss
+    "feature": (str, ["log1p", "pow0.3"]),  # model input compression
+    "lr_schedule": (str, ["constant", "cosine"]),
 }
 
 

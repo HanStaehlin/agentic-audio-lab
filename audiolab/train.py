@@ -32,6 +32,17 @@ def write_json(path, obj):
     tmp.replace(path)  # atomic, so readers never see half a file
 
 
+def spectral_loss(est, ref, power=0.3):
+    """Multi-resolution loss on power-law compressed magnitudes (closer to perception than SI-SDR)."""
+    total = 0.0
+    for n_fft, hop in ((256, 64), (512, 128), (1024, 256)):
+        win = torch.hann_window(n_fft, device=est.device)
+        e = torch.stft(est, n_fft, hop, window=win, return_complex=True).abs().clamp_min(1e-8).pow(power)
+        r = torch.stft(ref, n_fft, hop, window=win, return_complex=True).abs().clamp_min(1e-8).pow(power)
+        total = total + torch.nn.functional.mse_loss(e, r)
+    return total / 3
+
+
 def _score(args):
     est, noisy, clean, sr = args
     return speech_scores(torch.from_numpy(est), torch.from_numpy(clean), sr), \
@@ -67,8 +78,11 @@ def train(cfg, run_dir):
     status = {"state": "running", "step": 0, "loss": None, "device": device, "started": time.time()}
     write_json(status_path, status)
 
-    model = MaskGRU(cfg["n_fft"], cfg["hop"], cfg["hidden"], cfg["layers"]).to(device)
+    model = MaskGRU(cfg["n_fft"], cfg["hop"], cfg["hidden"], cfg["layers"], cfg.get("feature", "log1p")).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"])
+    sched = (torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=cfg["steps"])
+             if cfg.get("lr_schedule", "constant") == "cosine" else None)
+    spec_weight = cfg.get("spec_weight", 0.0)
     data = CropDataset(cfg["data_dir"], "train", int(cfg["crop_seconds"] * cfg["sample_rate"]), cfg["seed"])
     loader = DataLoader(data, batch_size=cfg["batch_size"], shuffle=True, num_workers=2, drop_last=True)
 
@@ -77,13 +91,18 @@ def train(cfg, run_dir):
         for noisy, clean in loader:
             model.train()
             noisy, clean = noisy.to(device), clean.to(device)
-            loss = -si_sdr(model(noisy), clean).mean()
+            est = model(noisy)
+            loss = -si_sdr(est, clean).mean()
+            if spec_weight:
+                loss = loss + spec_weight * spectral_loss(est, clean)
             if not math.isfinite(loss.item()):
                 raise FloatingPointError(f"loss is {loss.item()} at step {step}")
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["grad_clip"])
             opt.step()
+            if sched:
+                sched.step()
             step += 1
             running.append(loss.item())
             if step % cfg["log_every"] == 0 or step == cfg["steps"]:
