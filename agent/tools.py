@@ -32,8 +32,10 @@ ALLOWED = {  # key: (type, min, max) or (type, choices)
 
 
 class Session:
-    def __init__(self, max_runs, auto_approve=False):
+    def __init__(self, max_runs, auto_approve=False, backend="local"):
         self.max_runs, self.auto_approve, self.launched = max_runs, auto_approve, 0
+        # local: train on this machine; modal: same files, but the run executes on a Modal GPU
+        self.train_module = {"local": "audiolab.train", "modal": "audiolab.remote"}[backend]
         self.procs = {}  # run_id -> Popen, for runs started in this session
 
     # ---- helpers -------------------------------------------------------
@@ -113,7 +115,7 @@ class Session:
         run_dir.mkdir(parents=True)
         (run_dir / "overrides.json").write_text(json.dumps(overrides, indent=2))
         (run_dir / "reason.txt").write_text(reason)
-        cmd = [sys.executable, "-m", "audiolab.train", "--config", str(BASE_CONFIG), "--run-dir", str(run_dir),
+        cmd = [sys.executable, "-m", self.train_module, "--config", str(BASE_CONFIG), "--run-dir", str(run_dir),
                "--set", *[f"{k}={json.dumps(v)}" for k, v in overrides.items()]]
         out = open(run_dir / "stdout.log", "w")
         proc = subprocess.Popen(cmd, cwd=ROOT, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)

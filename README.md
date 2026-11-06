@@ -56,6 +56,17 @@ export ANTHROPIC_API_KEY=...
 python -m agent.run_agent --goal "Improve PESQ over the baseline, rtf below 0.1" --baseline baseline --max-runs 6
 ```
 
+On a [Modal](https://modal.com) GPU (the agent and the API key stay on your machine; only training runs remotely):
+
+```bash
+pip install modal anthropic && modal token new
+modal run modal_app.py::data_app.prepare_data      # once: download + resample into a Modal volume
+python -m audiolab.remote --config configs/baseline.json --run-dir runs/baseline
+python -m agent.run_agent --backend modal --goal "Improve PESQ over the baseline, rtf below 0.1" --baseline baseline --max-runs 6
+```
+
+`audiolab.remote` streams status, logs, metrics and weights back into `runs/<run_id>/`, so the agent's tools work the same for local and remote runs.
+
 ## Results
 
 _To be added: baseline vs. best agent run, and one example report._

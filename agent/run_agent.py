@@ -6,6 +6,8 @@ Needs ANTHROPIC_API_KEY. Every launch asks for approval unless --auto-approve is
 """
 import argparse
 import json
+import os
+from pathlib import Path
 
 import anthropic
 
@@ -43,10 +45,14 @@ def main():
     ap.add_argument("--max-runs", type=int, default=6)
     ap.add_argument("--max-turns", type=int, default=60)
     ap.add_argument("--auto-approve", action="store_true")
+    ap.add_argument("--backend", choices=["local", "modal"], default="local", help="where runs execute")
     args = ap.parse_args()
 
+    key_file = Path.home() / ".config" / "anthropic" / "api_key"  # outside the repo, never committed
+    if not os.environ.get("ANTHROPIC_API_KEY") and key_file.exists():
+        os.environ["ANTHROPIC_API_KEY"] = key_file.read_text().strip()
     client = anthropic.Anthropic()
-    session = Session(args.max_runs, args.auto_approve)
+    session = Session(args.max_runs, args.auto_approve, args.backend)
     messages = [{"role": "user", "content":
                  f"Goal: {args.goal}\nBaseline run: {args.baseline}\nRun budget: {args.max_runs} launches."}]
 
