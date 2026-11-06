@@ -13,9 +13,9 @@ Shrinking the window lowers latency but also frequency resolution, and smaller h
 
 ## Answer
 
-![Pareto fronts: PESQ vs latency and vs compute](results/latency/pareto.png)
+![Quality vs. latency: Pareto front](results/latency/pareto.png)
 
-*Left: configurations that meet the compute budget; the orange staircase is the Pareto front (no other configuration has both lower latency and higher PESQ). Right: the same configurations against compute, coloured by window length. Plot: `python scripts/plot_pareto.py`, from [runs.csv](results/latency/runs.csv).*
+*Each point is a model configuration that runs below 10% of one CPU core. The orange staircase is the Pareto front: no configuration has both lower latency and higher quality than the points on it. Plot: `python scripts/plot_pareto.py`, from [runs.csv](results/latency/runs.csv).*
 
 Best configuration per latency budget, with rtf < 0.1, 3 seeds each, on the full VoiceBank-DEMAND test set (824 files):
 

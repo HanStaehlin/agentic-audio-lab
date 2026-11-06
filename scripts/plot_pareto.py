@@ -1,10 +1,9 @@
-"""Pareto plots for the latency study, from results/latency/runs.csv.
+"""Pareto plot of the latency study (PESQ against latency), from results/latency/runs.csv.
 
     python scripts/plot_pareto.py
 
-Left: PESQ against algorithmic latency, among configs that meet the compute budget (rtf < 0.1).
-Right: PESQ against compute (rtf), all configs, coloured by latency.
-A config is on the front if no other config is at least as good on both axes and better on one.
+Only configs that meet the compute budget (rtf < 0.1) can be on the front. A config is on the
+front if no other config has lower or equal latency and higher or equal PESQ (and is better in one).
 """
 import csv
 from collections import defaultdict
@@ -64,75 +63,43 @@ def name(c):
 
 def main():
     configs = load_configs()
-    fig, (a, b) = plt.subplots(1, 2, figsize=(11.5, 4.6), gridspec_kw={"wspace": 0.28})
-    ylo, yhi = 2.30, 2.545
-
-    # ---- left: quality vs latency, compute budget met ----
     ok = [c for c in configs if c["rtf"] < RTF_BUDGET]
     pf = front(ok, "latency", "pesq")
-    staircase(a, pf, "latency", "pesq", 40, "#ff7f0e")
-    for c in configs:
-        on = c in pf
-        if c["rtf"] >= RTF_BUDGET:
-            a.scatter(c["latency"], c["pesq"], marker="x", s=36, color="#bbbbbb", zorder=3)
-            continue
-        if on:
-            a.errorbar(c["latency"], c["pesq"], yerr=c["std"], fmt="o", ms=9, color="#ff7f0e",
-                       mec="black", capsize=4, zorder=4)
-        else:
-            a.scatter(c["latency"], c["pesq"], s=28, color="#9e9e9e", zorder=3)
-    for c in pf:
-        a.annotate(f"{c['latency']:g} ms: PESQ {c['pesq']:.2f} ± {c['std']:.2f}\n{name(c)}, {c['seeds']} seeds",
-                   (c["latency"], c["pesq"]), xytext=(10, 10), textcoords="offset points", fontsize=8,
-                   weight="bold")
     ref = next(c for c in ok if c["latency"] == 32 and c["hop_ms"] == 8 and c["hidden"] == 256)
-    a.annotate(f"32 ms default: {ref['pesq']:.2f}\n(dominated by 16 ms)", (ref["latency"], ref["pesq"]),
-               xytext=(-10, -44), textcoords="offset points", fontsize=8, ha="right", color="#555555",
-               arrowprops={"arrowstyle": "-", "color": "#999999", "lw": 0.8})
-    a.set_xscale("log", base=2)
-    a.set_xticks([8, 16, 32], ["8", "16", "32"])
-    a.minorticks_off()
-    a.set_xlim(6.5, 40)
-    a.set_ylim(ylo, yhi)
-    a.set_xlabel("algorithmic latency (ms)")
-    a.set_ylabel("PESQ (wideband)")
-    a.set_title("Quality vs. latency (rtf < 0.1)", fontsize=11)
-    a.scatter([], [], marker="o", color="#ff7f0e", edgecolor="black", s=60, label="Pareto front (mean ± std over seeds)")
-    a.scatter([], [], marker="o", color="#9e9e9e", s=25, label="dominated config")
-    a.scatter([], [], marker="x", color="#bbbbbb", s=36, label="over compute budget")
-    a.legend(fontsize=8, loc="lower right", frameon=False)
 
-    # ---- right: quality vs compute, all configs ----
-    b.axvspan(RTF_BUDGET, 0.16, color="#d62728", alpha=0.06, zorder=0)
-    b.axvline(RTF_BUDGET, color="#d62728", ls="--", lw=1)
-    b.text(RTF_BUDGET + 0.003, yhi - 0.004, "over compute budget", fontsize=8, color="#d62728", va="top")
-    pf2 = front(configs, "rtf", "pesq")
-    staircase(b, pf2, "rtf", "pesq", 0.16, "#444444")
-    for c in configs:
-        on = c in pf2
-        b.scatter(c["rtf"], c["pesq"], s=70 if on else 30, color=COLORS[c["latency"]],
-                  edgecolor="black" if on else "none", zorder=3)
-    for c in pf2:
-        b.annotate(f"{c['latency']:g} ms, {name(c)}", (c["rtf"], c["pesq"]), xytext=(6, 6),
-                   textcoords="offset points", fontsize=7.5)
-    for lat, col in COLORS.items():
-        b.scatter([], [], color=col, s=30, label=f"{lat:g} ms window")
-    b.legend(fontsize=8, loc="lower left", frameon=False)
-    b.set_xlim(0.03, 0.16)
-    b.set_ylim(ylo, yhi)
-    b.set_xlabel("real-time factor (one CPU thread, lower is cheaper)")
-    b.set_ylabel("PESQ (wideband)")
-    b.set_title("Quality vs. compute (all configs)", fontsize=11)
-
-    for ax in (a, b):
-        ax.grid(alpha=0.25)
-        ax.spines[["top", "right"]].set_visible(False)
-    fig.suptitle(f"Causal GRU speech enhancer on VoiceBank-DEMAND (824 test files; noisy input PESQ {NOISY_PESQ})",
-                 fontsize=10, y=1.0, color="#333333")
-    fig.savefig(OUT, dpi=170, bbox_inches="tight")
-    print("saved", OUT.relative_to(ROOT))
-    print("front (latency):", [(c["latency"], round(c["pesq"], 3)) for c in pf])
-    print("front (compute):", [(c["latency"], round(c["rtf"], 3), round(c["pesq"], 3)) for c in pf2])
+    plt.rcParams.update({"font.size": 11})
+    fig, ax = plt.subplots(figsize=(7, 4.4))
+    staircase(ax, pf, "latency", "pesq", 40, "#ff7f0e")
+    others = [c for c in ok if c not in pf and c is not ref]
+    ax.scatter([c["latency"] for c in others], [c["pesq"] for c in others], s=30, color="#c4c4c4",
+               zorder=3, label="other configurations")
+    for c in pf:
+        ax.errorbar(c["latency"], c["pesq"], yerr=c["std"], fmt="o", ms=11, color="#ff7f0e",
+                    mec="black", capsize=5, zorder=4)
+        ax.annotate(f"{c['pesq']:.2f}", (c["latency"], c["pesq"]), xytext=(12, -4),
+                    textcoords="offset points", fontsize=12, weight="bold")
+    ax.scatter(ref["latency"], ref["pesq"], s=60, color="white", edgecolor="#555555", lw=1.5, zorder=4)
+    ax.annotate(f"usual 32 ms window: {ref['pesq']:.2f}\nworse and slower than 16 ms",
+                (ref["latency"], ref["pesq"]), xytext=(-18, -2), textcoords="offset points", va="center",
+                ha="right", fontsize=9, color="#444444",
+                arrowprops={"arrowstyle": "-", "color": "#888888", "lw": 0.8})
+    ax.errorbar([], [], yerr=[], fmt="o", ms=9, color="#ff7f0e", mec="black", capsize=4,
+                label="best trade-off (mean ± std, 3 seeds)")
+    ax.legend(fontsize=9, loc="lower right", frameon=False)
+    ax.set_xscale("log", base=2)
+    ax.set_xticks([8, 16, 32], ["8 ms", "16 ms", "32 ms"])
+    ax.minorticks_off()
+    ax.set_xlim(6.5, 40)
+    ax.set_ylim(2.30, 2.55)
+    ax.set_xlabel("latency (STFT window)  \u2190 better")
+    ax.set_ylabel("speech quality (PESQ)  better \u2192")
+    ax.set_title("Quality vs. latency of a real-time speech enhancer", fontsize=12, pad=10)
+    ax.grid(alpha=0.25)
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.text(0.01, -0.02, f"VoiceBank-DEMAND, 824 test files (noisy input: PESQ {NOISY_PESQ}). "
+             "Shown: configurations that run below 10% of one CPU core (rtf < 0.1).", fontsize=8, color="#666666")
+    fig.savefig(OUT, dpi=180, bbox_inches="tight")
+    print("saved", OUT.relative_to(ROOT), "front:", [(c["latency"], round(c["pesq"], 3)) for c in pf])
 
 
 if __name__ == "__main__":
