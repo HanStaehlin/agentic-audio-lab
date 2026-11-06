@@ -207,8 +207,12 @@ class Session:
         return {"baseline": baseline_id, "baseline_pesq": round(base["enhanced"]["pesq"], 3),
                 "noisy_input": base["noisy_input"], "rows": rows, "groups": summary}
 
-    def plot_tradeoff(self, run_ids, title="Quality vs. latency"):
-        """Scatter PESQ against algorithmic latency (mean and spread over seeds), marking the Pareto front."""
+    def plot_tradeoff(self, run_ids, title="Speech quality vs. algorithmic latency"):
+        """Plot PESQ (mean and std over seeds) against algorithmic latency; one point per config.
+
+        Filled points meet the compute budget (rtf < 0.1), crosses do not. The line connects the
+        best feasible config of each latency budget.
+        """
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
@@ -217,37 +221,59 @@ class Session:
         if ref is None:
             raise ValueError("None of these runs has metrics yet")
         groups = self.compare_runs(run_ids, ref)["groups"]
-        if not groups:
-            raise ValueError("None of these runs has metrics yet")
-        fig, ax = plt.subplots(figsize=(6, 4))
+        base = json.loads(self.base_config.read_text())
+
+        def label(g):
+            c = {**base, **g["config"]}
+            return f"hop {c['hop'] / c['sample_rate'] * 1e3:g} ms, {c['layers']}x{c['hidden']}"
+
+        by_latency = {}
         for g in groups:
-            ok = g["rtf"] < 0.1
-            ax.errorbar(g["algorithmic_latency_ms"], g["pesq_mean"], yerr=g["pesq_std"] or 0, fmt="o",
-                        color="tab:blue" if ok else "tab:gray", capsize=3)
-            label = ", ".join(f"{k}={v}" for k, v in g["config"].items() if k != "steps") or "base"
-            ax.annotate(label, (g["algorithmic_latency_ms"], g["pesq_mean"]), fontsize=7,
-                        xytext=(4, 4), textcoords="offset points")
-        front, best = [], -1.0
-        for g in sorted((g for g in groups if g["rtf"] < 0.1), key=lambda g: g["algorithmic_latency_ms"]):
-            if g["pesq_mean"] > best:
-                front.append(g)
-                best = g["pesq_mean"]
-        if front:
-            ax.step([g["algorithmic_latency_ms"] for g in front], [g["pesq_mean"] for g in front],
-                    where="post", color="tab:orange", label="best so far (rtf < 0.1)")
-            ax.legend(fontsize=8)
-        ax.set_xlabel("algorithmic latency (ms)")
-        ax.set_ylabel("PESQ (wb), mean over seeds")
-        ax.set_title(title)
+            by_latency.setdefault(g["algorithmic_latency_ms"], []).append(g)
+        fig, ax = plt.subplots(figsize=(8.5, 4.8))
+        best = []  # (x, group) of the best feasible config per budget
+        for lat, members in sorted(by_latency.items()):
+            members.sort(key=lambda g: g["pesq_mean"])
+            top = max((g for g in members if g["rtf"] < 0.1), key=lambda g: g["pesq_mean"], default=None)
+            for i, g in enumerate(members):
+                x = lat * 2 ** ((i - (len(members) - 1) / 2) * 0.09)  # spread configs of one budget sideways
+                ok = g["rtf"] < 0.1
+                if g is top:
+                    best.append((x, g))
+                ax.errorbar(x, g["pesq_mean"], yerr=g["pesq_std"] or 0, fmt="o" if ok else "x",
+                            color="tab:blue" if ok else "tab:red", ms=6, capsize=3, zorder=3)
+                seeds = f", {g['n_seeds']} seeds" if g["n_seeds"] > 1 else ""
+                note = "" if ok else f" (rtf {g['rtf']:.3f})"
+                if g is top:  # the budget's answer: label above the error bar, in bold
+                    ax.annotate(label(g) + seeds, (x, g["pesq_mean"] + (g["pesq_std"] or 0)), fontsize=7.5,
+                                xytext=(0, 5), textcoords="offset points", ha="center", weight="bold")
+                    continue
+                left = i % 2 == 0  # alternate sides so neighbours do not overlap
+                ax.annotate(label(g) + seeds + note, (x, g["pesq_mean"]), fontsize=7,
+                            xytext=(-7 if left else 7, -3), textcoords="offset points",
+                            ha="right" if left else "left", color="black" if ok else "tab:red")
+        if best:
+            ax.plot([x for x, _ in best], [g["pesq_mean"] for _, g in best],
+                    "--", color="tab:orange", lw=1.5, zorder=2, label="best with rtf < 0.1")
+        ax.plot([], [], "x", color="tab:red", label="over compute budget (rtf >= 0.1)")
+        ax.legend(fontsize=8, loc="lower right")
+        ax.set_xscale("log", base=2)  # 8, 16, 32 ms evenly spaced
+        ax.set_xticks(sorted(by_latency), [f"{v:g}" for v in sorted(by_latency)])
+        ax.minorticks_off()
+        ax.set_xlim(min(by_latency) / 1.6, max(by_latency) * 1.6)
+        ax.set_xlabel("algorithmic latency = STFT window (ms)")
+        ax.set_ylabel("PESQ (wideband), mean ± std over seeds")
+        ax.set_title(title, fontsize=11)
         ax.grid(alpha=0.3)
         self.reports.mkdir(parents=True, exist_ok=True)
         path = self.reports / "tradeoff.png"
         fig.tight_layout()
-        fig.savefig(path, dpi=150)
+        fig.savefig(path, dpi=160)
         plt.close(fig)
         return {"saved": str(path.relative_to(ROOT)), "groups_plotted": len(groups),
-                "pareto_front": [{"latency_ms": g["algorithmic_latency_ms"], "pesq_mean": g["pesq_mean"],
-                                  "config": g["config"]} for g in front]}
+                "best_per_budget": [{"latency_ms": g["algorithmic_latency_ms"], "pesq_mean": g["pesq_mean"],
+                                     "pesq_std": g["pesq_std"], "n_seeds": g["n_seeds"], "config": g["config"]}
+                                    for _, g in best]}
 
     def write_report(self, title, markdown):
         self.reports.mkdir(parents=True, exist_ok=True)

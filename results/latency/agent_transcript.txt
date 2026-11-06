@@ -1,0 +1,114 @@
+
+[tool] list_runs {}
+
+[tool] launch_run {"name": "w256-h64-hid256-s0", "overrides": {"n_fft": 256, "hop": 64}, "reason": "16 ms budget, same 75% overlap and width as baseline. Baseline compute is about 0.38 ms/hop (rtf 0.048 at 8 ms hop), so a 4 ms hop should give rtf near 0.09 or slightly less because the input has fewer bins. Tests the 
+
+[tool] launch_run {"name": "w256-h128-hid256-s0", "overrides": {"n_fft": 256, "hop": 128}, "reason": "16 ms budget, 50% overlap: half the frames, so rtf near 0.045 with a safe margin. Tests whether overlap matters more than headroom, which could later go into width."}
+
+[tool] launch_run {"name": "w128-h64-hid256-s0", "overrides": {"n_fft": 128, "hop": 64}, "reason": "8 ms budget at 50% overlap (largest allowed hop) and default width; expected rtf about 0.09. Tests the quality floor at 8 ms when the 65-bin frequency resolution is the main limit."}
+
+[tool] launch_run {"name": "w128-h32-hid128-s0", "overrides": {"n_fft": 128, "hop": 32, "hidden": 128}, "reason": "8 ms budget, 75% overlap. A 2 ms hop needs a narrower GRU (128) to stay under rtf 0.1. Tests overlap against width at the lowest latency."}
+
+[tool] wait_for_run {"run_id": "1106-105935-w256-h64-hid256-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-105938-w256-h128-hid256-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-105940-w128-h64-hid256-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-105942-w128-h32-hid128-s0", "timeout_minutes": 60}
+
+[tool] launch_run {"name": "w128-h32-hid128-s0", "overrides": {"n_fft": 128, "hop": 32, "hidden": 128}, "reason": "Relaunch of the run that failed on a Modal rate limit (infrastructure, not config). 8 ms budget, 75% overlap. A 2 ms hop needs about 0.2 ms/hop or less, so the width drops to 128. Tests whether overlap (
+
+[tool] launch_run {"name": "w512-h64-hid256-s0", "overrides": {"n_fft": 512, "hop": 64}, "reason": "32 ms budget, 87.5% overlap. At 16 ms the smaller hop gave +0.09 PESQ, and this tests whether the same holds at 32 ms. Expected rtf is about 0.096 (0.38 ms/4 ms), so this may sit right at the limit."}
+
+[tool] launch_run {"name": "w512-h128-hid384-s0", "overrides": {"hidden": 384}, "reason": "32 ms budget: spend the rtf headroom (0.048) on width instead of hop. GRU cost goes up about 2.25x, so expected rtf is about 0.09\u20130.1. Tests width against overlap at 32 ms."}
+
+[tool] launch_run {"name": "w256-h128-hid352-s0", "overrides": {"n_fft": 256, "hop": 128, "hidden": 352}, "reason": "16 ms budget: 50% overlap with a wider GRU (about 1.9x compute, expected rtf about 0.08). Tests whether width can make up the 0.09 PESQ that w256-h128 lost to w256-h64 at the same width."}
+
+[tool] wait_for_run {"run_id": "1106-110803-w128-h32-hid128-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-110805-w512-h64-hid256-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-110807-w512-h128-hid384-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-110809-w256-h128-hid352-s0", "timeout_minutes": 60}
+
+[tool] launch_run {"name": "w512-h128-hid384-s0", "overrides": {"hidden": 384}, "reason": "Relaunch after a Modal rate-limit failure (infrastructure). 32 ms budget: wider GRU at the default hop; expected rtf about 0.08\u20130.1. Tests whether width helps at 32 ms, given that hop 64 did not (2.419 vs 2.466)."}
+
+[tool] launch_run {"name": "w128-h32-hid128-L1-s0", "overrides": {"n_fft": 128, "hop": 32, "hidden": 128, "layers": 1}, "reason": "At 8 ms, hop 32 gave 2.499 against 2.331 at hop 64, but rtf was 0.130 at 0.26 ms/hop. Fitting ms/hop against hidden\u00b2 shows a large fixed cost (about 0.23 ms), so narrowing the GRU al
+
+[tool] launch_run {"name": "w256-h64-hid256-s1", "overrides": {"n_fft": 256, "hop": 64, "seed": 1}, "reason": "Second seed for the 16 ms leader (2.512, rtf 0.095). It beat w256-h128 by 0.09 and the 32 ms reference by 0.05, which needs confirming across seeds."}
+
+[tool] launch_run {"name": "ref-w512-h128-s1", "overrides": {"seed": 1}, "reason": "Second seed for the 32 ms default (seed 0: 2.466), to judge whether 32 ms really beats 16 ms or the gap is noise."}
+
+[tool] wait_for_run {"run_id": "1106-111637-w512-h128-hid384-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-111639-w128-h32-hid128-L1-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-111641-w256-h64-hid256-s1", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-111643-ref-w512-h128-s1", "timeout_minutes": 60}
+
+[tool] launch_run {"name": "w256-h64-hid256-s1", "overrides": {"n_fft": 256, "hop": 64, "seed": 1}, "reason": "Relaunch of the seed-1 confirmation for the 16 ms leader after a Modal rate-limit failure (infrastructure)."}
+
+[tool] launch_run {"name": "w256-h64-hid256-s2", "overrides": {"n_fft": 256, "hop": 64, "seed": 2}, "reason": "Third seed for the 16 ms leader. Its seed-0 PESQ (2.512) beat the 32 ms default (mean 2.469 over 2 seeds), which would mean 16 ms costs nothing; 3 seeds are needed to tell that from noise."}
+
+[tool] launch_run {"name": "w128-h32-hid128-L1-s1", "overrides": {"n_fft": 128, "hop": 32, "hidden": 128, "layers": 1, "seed": 1}, "reason": "Second seed for the current best feasible 8 ms config (seed 0: 2.402, rtf 0.070), to confirm its 0.07 lead over w128-h64-hid256."}
+
+[tool] launch_run {"name": "w128-h32-hid192-L1-s0", "overrides": {"n_fft": 128, "hop": 32, "hidden": 192, "layers": 1}, "reason": "8 ms budget: use the rtf headroom (0.070) for width in the one-layer model. The cost fit predicts about 0.16 ms/hop, rtf about 0.08. Tests whether width recovers part of the gap between o
+
+[tool] wait_for_run {"run_id": "1106-112351-w256-h64-hid256-s1", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-112353-w256-h64-hid256-s2", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-112355-w128-h32-hid128-L1-s1", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-112357-w128-h32-hid192-L1-s0", "timeout_minutes": 60}
+
+[tool] launch_run {"name": "w128-h32-hid192-L1-s0", "overrides": {"n_fft": 128, "hop": 32, "hidden": 192, "layers": 1}, "reason": "Relaunch after a Modal rate-limit failure (infrastructure). 8 ms: a wider one-layer GRU at hop 32, predicted rtf about 0.08\u20130.09. Tests whether width beats hid128-L1 (mean 2.428 over
+
+[tool] launch_run {"name": "ref-w512-h128-s2", "overrides": {"seed": 2}, "reason": "Third seed for the 32 ms default (2.466, 2.472). 16 ms w256-h64 averages 2.503 over 3 seeds; a matching 3-seed comparison decides whether 32 ms really is no better than 16 ms."}
+
+[tool] launch_run {"name": "w512-h64-hid256-s1", "overrides": {"n_fft": 512, "hop": 64, "seed": 1}, "reason": "32 ms with hop 4 ms gave 2.419 on seed 0, while hop 4 ms was the best choice at 16 ms. A second seed tells whether a small hop really doesn't help at 32 ms or seed 0 was unlucky."}
+
+[tool] wait_for_run {"run_id": "1106-113157-w128-h32-hid192-L1-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-113159-ref-w512-h128-s2", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-113201-w512-h64-hid256-s1", "timeout_minutes": 60}
+
+[tool] launch_run {"name": "w128-h32-hid128-L1-s2", "overrides": {"n_fft": 128, "hop": 32, "hidden": 128, "layers": 1, "seed": 2}, "reason": "Third seed for the best feasible 8 ms config (2.402, 2.454). The 0.05 seed spread is about the size of the 8 vs 16 ms gap estimate, so this tightens the 8 ms PESQ that the qual
+
+[tool] wait_for_run {"run_id": "1106-113955-w128-h32-hid128-L1-s2", "timeout_minutes": 60}
+
+[tool] compare_runs {"baseline_id": "ref-w512-h128", "run_ids": ["ref-w512-h128", "1106-111643-ref-w512-h128-s1", "1106-113159-ref-w512-h128-s2", "1106-110805-w512-h64-hid256-s0", "1106-111637-w512-h128-hid384-s0", "1106-105935-w256-h64-hid256-s0", "1106-112351-w256-h64-hid256-s1", "1106-112353-w256-h64-hid256-s2", "11
+
+[tool] plot_tradeoff {"run_ids": ["ref-w512-h128", "1106-111643-ref-w512-h128-s1", "1106-113159-ref-w512-h128-s2", "1106-110805-w512-h64-hid256-s0", "1106-111637-w512-h128-hid384-s0", "1106-105935-w256-h64-hid256-s0", "1106-112351-w256-h64-hid256-s1", "1106-112353-w256-h64-hid256-s2", "1106-105938-w256-h128-hid256-s0", 
+
+[tool] write_report {"title": "How much PESQ does each ms of algorithmic latency cost? Causal GRU mask, VoiceBank-DEMAND, rtf < 0.1", "markdown": "## Question\nFor algorithmic latency budgets of 8, 16 and 32 ms (n_fft 128/256/512 at 16 kHz), which hop / GRU width / depth gives the best wideband PESQ while keeping rtf <
+
+[agent] Each millisecond of latency costs very little speech quality: all three budgets land within about 0.05 PESQ of each other, and 32 ms does no better than 16 ms. I confirmed the best configuration of each budget with 3 seeds and used all 20 launches. The report is saved with the trade-off plot (`reports/latency/tradeoff.png`).
+
+| Budget | Best config with rtf < 0.1 | PESQ (3 seeds, mean ± std) | rtf |
+|---|---|---|---|
+| 8 ms | n_fft 128, hop 32, width 128, **1 layer** | 2.450 ± 0.047 | ≈0.08 |
+| 16 ms | n_fft 256, hop 64, width 256, 2 layers | **2.503 ± 0.016** | 0.09–0.097 |
+| 32 ms | default (n_fft 512, hop 128, width 256, 2 layers) | 2.470 ± 0.003 | ≈0.05 |
+
+- **8 → 16 ms:** about +0.007 PESQ per ms. This is not confirmed: the 8 ms seeds range from 2.40 to 2.50, so the gap could be noise.
+- **16 → 32 ms:** no gain. The worst 16 ms seed (2.485) beats the best 32 ms seed (2.472). Two other 32 ms settings (hop 64, width 384) also scored lower, on one seed each. SI-SDR, the training loss, does rise with latency (17.5 → 18.6 → 18.8 dB), but that doesn't show up in PESQ past 16 ms.
+
+**What limits quality at low latency:**
+- **Hop size matters more than window length.** A smaller hop gave +0.08 PESQ at 16 ms and +0.12 at 8 ms. Model width made little difference anywhere.
+- **Fixed compute cost per layer.** Each GRU layer costs about 0.1 ms per frame however narrow it is. A 2 ms hop leaves only 0.2 ms per frame, so the 2-layer model can't fit at 8 ms. On one seed it reached 2.499 (close to the 16 ms result) but ran at rtf 0.13.
+
+**Caveats:**
+- rtf varies about ±10% between identical runs, so the 16 ms winner (up to 0.097) has little margin on a real device.
+- 5 launches failed on infrastructure (4 Modal rate-limit errors, 1 preemption), none because of a config. All but one were rerun. The one not rerun was the second seed of 32 ms with hop 64, so that setting has only one seed.
+
+**What I'd try next:**
+1. Cut the per-layer overhead (fused or exported GRU inference) so the 2-layer, hop-32 model fits at 8 ms.
+2. More seeds at 8 ms to pin down the 8 vs 16 ms gap.
+3. Longer training for the 32 ms models, in case they are under-trained at the shared 10k steps.
+4. A loss closer to perceived quality than SI-SDR alone.
+5. Measure rtf on the target device before using the 16 ms config.

@@ -39,11 +39,24 @@ def main():
     import modal
     from modal_app import app, train_remote
 
+    import random
+    import time
+
     try:
-        with modal.enable_output(), app.run():
-            for files in train_remote.remote_gen(cfg, run_dir.name):
-                for name, data in files.items():
-                    write(run_dir / name, data)
+        for attempt in range(6):
+            try:
+                with modal.enable_output(), app.run():
+                    for files in train_remote.remote_gen(cfg, run_dir.name):
+                        for name, data in files.items():
+                            write(run_dir / name, data)
+                break
+            except modal.exception.ResourceExhaustedError as exc:
+                # parallel launches can hit Modal's app-create rate limit; nothing ran yet, so retry
+                if attempt == 5:
+                    raise
+                wait = 15 * (attempt + 1) + random.uniform(0, 10)
+                print(f"rate limited ({exc}); retrying in {wait:.0f} s", flush=True)
+                time.sleep(wait)
     except BaseException as exc:
         status_path = run_dir / "status.json"
         status = json.loads(status_path.read_text()) if status_path.exists() else {}
