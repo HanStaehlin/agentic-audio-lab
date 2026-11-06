@@ -32,16 +32,29 @@ def write_json(path, obj):
     tmp.replace(path)  # atomic, so readers never see half a file
 
 
+def _score(args):
+    est, noisy, clean, sr = args
+    return speech_scores(torch.from_numpy(est), torch.from_numpy(clean), sr), \
+        speech_scores(torch.from_numpy(noisy), torch.from_numpy(clean), sr)
+
+
 def evaluate(model, cfg, device):
+    """Enhance the test files on the GPU, then score them on all CPU cores (PESQ is slow)."""
+    from concurrent.futures import ProcessPoolExecutor
+    import multiprocessing as mp
+    import os
+
     model.eval()
     pairs = list_pairs(cfg["data_dir"], "test")[: cfg["eval_files"]]
-    enhanced, noisy_in = [], []
+    jobs = []
     with torch.no_grad():
         for noisy_path, clean_path in pairs:
             noisy, clean = load(noisy_path), load(clean_path)
             est = model(noisy.unsqueeze(0).to(device)).squeeze(0).cpu()
-            enhanced.append(speech_scores(est, clean, cfg["sample_rate"]))
-            noisy_in.append(speech_scores(noisy, clean, cfg["sample_rate"]))
+            jobs.append((est.numpy(), noisy.numpy(), clean.numpy(), cfg["sample_rate"]))
+    with ProcessPoolExecutor(max_workers=os.cpu_count(), mp_context=mp.get_context("spawn")) as pool:
+        scores = list(pool.map(_score, jobs, chunksize=8))
+    enhanced, noisy_in = [s[0] for s in scores], [s[1] for s in scores]
     mean = lambda rows: {k: float(np.mean([r[k] for r in rows])) for k in rows[0]}
     return {"enhanced": mean(enhanced), "noisy_input": mean(noisy_in), "eval_files": len(pairs)}
 

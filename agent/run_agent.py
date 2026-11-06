@@ -16,18 +16,24 @@ from agent.tools import SCHEMAS, Session
 MODEL = "claude-opus-5-5"
 
 SYSTEM = """You run speech-enhancement experiments for an audio ML researcher.
-The model is a small causal GRU that predicts a spectral mask; it is trained with an SI-SDR loss on
-VoiceBank-DEMAND (16 kHz) and evaluated on the test set with PESQ (wideband), STOI and SI-SDR,
-plus streaming latency per hop on CPU. It must stay real-time capable (rtf well below 1).
+The model is a small causal GRU that predicts a spectral mask frame by frame, so it can run as a stream.
+It is trained with an SI-SDR loss on VoiceBank-DEMAND (16 kHz) and evaluated on the test set with
+PESQ (wideband), STOI and SI-SDR. Latency has two parts:
+- algorithmic latency = one STFT window (n_fft / 16 kHz): 128 -> 8 ms, 256 -> 16 ms, 512 -> 32 ms;
+- compute: ms per hop on one CPU thread, batch 1; rtf = compute / hop duration. rtf must stay below 0.1
+  (a device-like budget). A smaller hop means more frames per second, so a higher rtf at the same width.
 
 How to work:
 - Start with list_runs. Form a hypothesis before each launch and state it in `reason`.
-- Change one or two things per run so results stay interpretable. Only one run can be active.
-- Use wait_for_run instead of polling. If a run fails or crashes, read its logs with get_run_status,
-  diagnose the cause, and say what you conclude before launching anything else.
+- Change few things per run so results stay interpretable. Several runs can be active at once (see
+  parallel_slots_free); use them, then wait_for_run on each.
+- If a run fails or crashes, read its logs with get_run_status, diagnose the cause, and say what you
+  conclude before relaunching.
 - Respect the run budget. If the human declines a launch, do not retry the same run.
-- Judge runs with compare_runs against the baseline. Treat PESQ differences below ~0.03 as noise
-  on a single seed, and weigh quality against latency.
+- Single-seed PESQ differences of about 0.05 can be noise. Only call a difference real if it holds
+  across at least 2 seeds (compare_runs pools seeds in 'groups'); spend budget on seeds for the
+  configurations that decide the answer.
+- Before the report, call plot_tradeoff on all finished runs and link the PNG in the report.
 - Finish by calling write_report, then give a short summary."""
 
 
@@ -46,15 +52,19 @@ def main():
     ap.add_argument("--max-turns", type=int, default=60)
     ap.add_argument("--auto-approve", action="store_true")
     ap.add_argument("--backend", choices=["local", "modal"], default="local", help="where runs execute")
+    ap.add_argument("--base-config", default=None, help="config every run starts from (default configs/baseline.json)")
+    ap.add_argument("--study", default="", help="keep runs and reports in runs/<study>/, reports/<study>/")
+    ap.add_argument("--max-parallel", type=int, default=None, help="active runs at once (default: 1 local, 4 modal)")
     args = ap.parse_args()
 
     key_file = Path.home() / ".config" / "anthropic" / "api_key"  # outside the repo, never committed
     if not os.environ.get("ANTHROPIC_API_KEY") and key_file.exists():
         os.environ["ANTHROPIC_API_KEY"] = key_file.read_text().strip()
     client = anthropic.Anthropic()
-    session = Session(args.max_runs, args.auto_approve, args.backend)
+    parallel = args.max_parallel or (4 if args.backend == "modal" else 1)
+    session = Session(args.max_runs, args.auto_approve, args.backend, args.base_config, args.study, parallel)
     messages = [{"role": "user", "content":
-                 f"Goal: {args.goal}\nBaseline run: {args.baseline}\nRun budget: {args.max_runs} launches."}]
+                 f"Goal: {args.goal}\nBaseline run: {args.baseline}\nRun budget: {args.max_runs} launches, up to {parallel} in parallel."}]
 
     for _ in range(args.max_turns):
         response = client.beta.messages.create(

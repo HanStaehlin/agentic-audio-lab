@@ -1,12 +1,14 @@
 """Tools the agent can call, with their safeguards.
 
 Safeguards:
-- only whitelisted config keys within fixed ranges can be changed;
-- one run at a time (Colab has one GPU) and a hard cap on the number of runs;
+- only whitelisted config keys within fixed ranges can be changed, and the resulting STFT
+  setup must be valid (hop at most half the window);
+- a cap on parallel runs (1 locally, a few on Modal) and a hard cap on the number of launches;
 - every launch needs a human "y" unless the session was started with --auto-approve.
 """
 import json
 import os
+import statistics
 import subprocess
 import sys
 import time
@@ -14,9 +16,8 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-RUNS, REPORTS = ROOT / "runs", ROOT / "reports"
-BASE_CONFIG = ROOT / "configs" / "baseline.json"
 STALE_SECONDS = 15 * 60
+ACTIVE = ("starting", "running", "evaluating")
 
 ALLOWED = {  # key: (type, min, max) or (type, choices)
     "lr": (float, 1e-5, 1e-2),
@@ -25,17 +26,23 @@ ALLOWED = {  # key: (type, min, max) or (type, choices)
     "batch_size": (int, 4, 64),
     "steps": (int, 100, 20000),
     "crop_seconds": (float, 0.5, 4.0),
-    "n_fft": (int, [256, 512, 1024]),
-    "hop": (int, [64, 128, 256]),
+    "n_fft": (int, [128, 256, 512, 1024]),  # window = algorithmic latency: 8 / 16 / 32 / 64 ms at 16 kHz
+    "hop": (int, [32, 64, 128, 256]),
     "grad_clip": (float, 0.1, 100.0),
+    "seed": (int, 0, 99),
 }
 
 
 class Session:
-    def __init__(self, max_runs, auto_approve=False, backend="local"):
+    def __init__(self, max_runs, auto_approve=False, backend="local", base_config=None,
+                 study="", max_parallel=1):
         self.max_runs, self.auto_approve, self.launched = max_runs, auto_approve, 0
         # local: train on this machine; modal: same files, but the run executes on a Modal GPU
         self.train_module = {"local": "audiolab.train", "modal": "audiolab.remote"}[backend]
+        self.base_config = Path(base_config or ROOT / "configs" / "baseline.json")
+        self.runs = ROOT / "runs" / study if study else ROOT / "runs"
+        self.reports = ROOT / "reports" / study if study else ROOT / "reports"
+        self.max_parallel = max_parallel
         self.procs = {}  # run_id -> Popen, for runs started in this session
 
     # ---- helpers -------------------------------------------------------
@@ -45,7 +52,7 @@ class Session:
 
     def _status(self, run_dir):
         status = self._read(run_dir / "status.json") or {"state": "starting"}
-        if status["state"] in ("starting", "running", "evaluating") and not self._alive(run_dir):
+        if status["state"] in ACTIVE and not self._alive(run_dir):
             status = {**status, "state": "crashed", "error": "process exited without finishing"}
         return status
 
@@ -64,14 +71,16 @@ class Session:
         except ProcessLookupError:
             return False
 
-    def _active_run(self):
-        for d in sorted(RUNS.glob("*")):
-            if self._status(d)["state"] in ("starting", "running", "evaluating"):
-                return d.name
-        return None
+    def _run_dirs(self):
+        return sorted(d for d in self.runs.glob("*") if d.is_dir())
 
-    @staticmethod
-    def _validate(overrides):
+    def _active_runs(self):
+        return [d.name for d in self._run_dirs() if self._status(d)["state"] in ACTIVE]
+
+    def _config(self, run_id):
+        return self._read(self.runs / run_id / "config.json") or {}
+
+    def _validate(self, overrides):
         clean = {}
         for key, value in overrides.items():
             if key not in ALLOWED:
@@ -84,48 +93,73 @@ class Session:
             elif not spec[1] <= value <= spec[2]:
                 raise ValueError(f"{key}={value} outside [{spec[1]}, {spec[2]}]")
             clean[key] = value
+        cfg = {**json.loads(self.base_config.read_text()), **clean}
+        if cfg["hop"] > cfg["n_fft"] // 2:
+            raise ValueError(f"hop={cfg['hop']} must be at most n_fft/2={cfg['n_fft'] // 2} "
+                             "(Hann overlap-add needs at least 50% overlap); set hop too")
         return clean
+
+    def _row(self, run_id):
+        m = self._read(self.runs / run_id / "metrics.json")
+        cfg = self._config(run_id)
+        row = {"run_id": run_id, "overrides": self._read(self.runs / run_id / "overrides.json") or {},
+               "seed": cfg.get("seed")}
+        if m is None:
+            return {**row, "state": self._status(self.runs / run_id)["state"]}
+        for k in ("pesq", "stoi", "si_sdr"):
+            row[k] = round(m["enhanced"][k], 3)
+        row["algorithmic_latency_ms"] = round(m["latency"]["algorithmic_latency_ms"], 1)
+        row["ms_per_hop"] = round(m["latency"]["ms_per_hop"], 3)
+        row["rtf"] = round(m["latency"]["rtf"], 3)
+        row["params"] = m["latency"]["params"]
+        return row
 
     # ---- tools ---------------------------------------------------------
     def list_runs(self):
         rows = []
-        for d in sorted(RUNS.glob("*")):
+        for d in self._run_dirs():
             m = self._read(d / "metrics.json")
             rows.append({
                 "run_id": d.name,
                 "state": self._status(d)["state"],
                 "overrides": (self._read(d / "overrides.json") or {}),
                 "pesq": m and round(m["enhanced"]["pesq"], 3),
-                "si_sdr": m and round(m["enhanced"]["si_sdr"], 2),
+                "latency_ms": m and round(m["latency"]["algorithmic_latency_ms"], 1),
+                "rtf": m and round(m["latency"]["rtf"], 3),
             })
-        return {"runs": rows, "runs_left_in_budget": self.max_runs - self.launched}
+        return {"runs": rows, "runs_left_in_budget": self.max_runs - self.launched,
+                "parallel_slots_free": self.max_parallel - len(self._active_runs()),
+                "base_config": json.loads(self.base_config.read_text())}
 
     def launch_run(self, name, overrides, reason):
         if self.launched >= self.max_runs:
             raise RuntimeError(f"Run budget of {self.max_runs} is used up. Write the report instead.")
-        if active := self._active_run():
-            raise RuntimeError(f"Run '{active}' is still active; wait for it first (one GPU).")
+        active = self._active_runs()
+        if len(active) >= self.max_parallel:
+            raise RuntimeError(f"{len(active)} runs active ({', '.join(active)}), the limit is "
+                               f"{self.max_parallel}; wait for one first.")
         overrides = self._validate(overrides)
         run_id = f"{datetime.now():%m%d-%H%M%S}-{''.join(c if c.isalnum() else '-' for c in name)[:40]}"
         if not self.auto_approve:
             print(f"\n[approval] launch {run_id}\n  overrides: {overrides}\n  reason: {reason}")
             if input("  approve? [y/N] ").strip().lower() != "y":
                 return {"launched": False, "message": "The human declined this run. Ask why or propose something else."}
-        run_dir = RUNS / run_id
+        run_dir = self.runs / run_id
         run_dir.mkdir(parents=True)
         (run_dir / "overrides.json").write_text(json.dumps(overrides, indent=2))
         (run_dir / "reason.txt").write_text(reason)
-        cmd = [sys.executable, "-m", self.train_module, "--config", str(BASE_CONFIG), "--run-dir", str(run_dir),
+        cmd = [sys.executable, "-m", self.train_module, "--config", str(self.base_config), "--run-dir", str(run_dir),
                "--set", *[f"{k}={json.dumps(v)}" for k, v in overrides.items()]]
         out = open(run_dir / "stdout.log", "w")
         proc = subprocess.Popen(cmd, cwd=ROOT, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
         (run_dir / "pid").write_text(str(proc.pid))
         self.procs[run_id] = proc
         self.launched += 1
+        time.sleep(2)  # space out launches so run ids and Modal app starts don't collide
         return {"launched": True, "run_id": run_id, "runs_left_in_budget": self.max_runs - self.launched}
 
     def get_run_status(self, run_id, tail_lines=20):
-        run_dir = RUNS / run_id
+        run_dir = self.runs / run_id
         if not run_dir.exists():
             raise FileNotFoundError(f"No run '{run_id}'")
         status = self._status(run_dir)
@@ -139,34 +173,85 @@ class Session:
     def wait_for_run(self, run_id, timeout_minutes=30):
         deadline = time.time() + 60 * min(timeout_minutes, 60)
         while time.time() < deadline:
-            state = self._status(RUNS / run_id)["state"]
-            if state not in ("starting", "running", "evaluating"):
+            if self._status(self.runs / run_id)["state"] not in ACTIVE:
                 break
             time.sleep(20)
         return self.get_run_status(run_id, tail_lines=10)
 
     def compare_runs(self, run_ids, baseline_id):
-        base = self._read(RUNS / baseline_id / "metrics.json")
+        """Rows per run, plus groups: runs with the same config except the seed, as mean and spread."""
+        base = self._read(self.runs / baseline_id / "metrics.json")
         if base is None:
             raise ValueError(f"Baseline '{baseline_id}' has no metrics yet")
-        rows = []
-        for rid in run_ids:
-            m = self._read(RUNS / rid / "metrics.json")
-            if m is None:
-                rows.append({"run_id": rid, "state": self._status(RUNS / rid)["state"]})
+        rows = [self._row(r) for r in run_ids]
+        for row in rows:
+            if "pesq" in row:
+                for k in ("pesq", "stoi", "si_sdr"):
+                    row[f"delta_{k}"] = round(row[k] - base["enhanced"][k], 3)
+        groups = {}
+        for row in rows:
+            if "pesq" not in row:
                 continue
-            row = {"run_id": rid, "overrides": self._read(RUNS / rid / "overrides.json")}
+            key = json.dumps({k: v for k, v in sorted(row["overrides"].items()) if k != "seed"})
+            groups.setdefault(key, []).append(row)
+        summary = []
+        for key, members in groups.items():
+            g = {"config": json.loads(key), "n_seeds": len(members),
+                 "algorithmic_latency_ms": members[0]["algorithmic_latency_ms"],
+                 "rtf": round(max(r["rtf"] for r in members), 3)}
             for k in ("pesq", "stoi", "si_sdr"):
-                row[k] = round(m["enhanced"][k], 3)
-                row[f"delta_{k}"] = round(m["enhanced"][k] - base["enhanced"][k], 3)
-            row["ms_per_hop"] = round(m["latency"]["ms_per_hop"], 3)
-            row["rtf"] = round(m["latency"]["rtf"], 3)
-            rows.append(row)
-        return {"baseline": baseline_id, "noisy_input": base["noisy_input"], "rows": rows}
+                vals = [r[k] for r in members]
+                g[f"{k}_mean"] = round(statistics.mean(vals), 3)
+                g[f"{k}_std"] = round(statistics.stdev(vals), 3) if len(vals) > 1 else None
+            summary.append(g)
+        return {"baseline": baseline_id, "baseline_pesq": round(base["enhanced"]["pesq"], 3),
+                "noisy_input": base["noisy_input"], "rows": rows, "groups": summary}
+
+    def plot_tradeoff(self, run_ids, title="Quality vs. latency"):
+        """Scatter PESQ against algorithmic latency (mean and spread over seeds), marking the Pareto front."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        ref = next((r for r in run_ids if (self.runs / r / "metrics.json").exists()), None)
+        if ref is None:
+            raise ValueError("None of these runs has metrics yet")
+        groups = self.compare_runs(run_ids, ref)["groups"]
+        if not groups:
+            raise ValueError("None of these runs has metrics yet")
+        fig, ax = plt.subplots(figsize=(6, 4))
+        for g in groups:
+            ok = g["rtf"] < 0.1
+            ax.errorbar(g["algorithmic_latency_ms"], g["pesq_mean"], yerr=g["pesq_std"] or 0, fmt="o",
+                        color="tab:blue" if ok else "tab:gray", capsize=3)
+            label = ", ".join(f"{k}={v}" for k, v in g["config"].items() if k != "steps") or "base"
+            ax.annotate(label, (g["algorithmic_latency_ms"], g["pesq_mean"]), fontsize=7,
+                        xytext=(4, 4), textcoords="offset points")
+        front, best = [], -1.0
+        for g in sorted((g for g in groups if g["rtf"] < 0.1), key=lambda g: g["algorithmic_latency_ms"]):
+            if g["pesq_mean"] > best:
+                front.append(g)
+                best = g["pesq_mean"]
+        if front:
+            ax.step([g["algorithmic_latency_ms"] for g in front], [g["pesq_mean"] for g in front],
+                    where="post", color="tab:orange", label="best so far (rtf < 0.1)")
+            ax.legend(fontsize=8)
+        ax.set_xlabel("algorithmic latency (ms)")
+        ax.set_ylabel("PESQ (wb), mean over seeds")
+        ax.set_title(title)
+        ax.grid(alpha=0.3)
+        self.reports.mkdir(parents=True, exist_ok=True)
+        path = self.reports / "tradeoff.png"
+        fig.tight_layout()
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+        return {"saved": str(path.relative_to(ROOT)), "groups_plotted": len(groups),
+                "pareto_front": [{"latency_ms": g["algorithmic_latency_ms"], "pesq_mean": g["pesq_mean"],
+                                  "config": g["config"]} for g in front]}
 
     def write_report(self, title, markdown):
-        REPORTS.mkdir(exist_ok=True)
-        path = REPORTS / f"{datetime.now():%Y%m%d-%H%M%S}.md"
+        self.reports.mkdir(parents=True, exist_ok=True)
+        path = self.reports / f"{datetime.now():%Y%m%d-%H%M%S}.md"
         path.write_text(f"# {title}\n\n{markdown}\n")
         return {"saved": str(path.relative_to(ROOT))}
 
@@ -174,19 +259,21 @@ class Session:
 SCHEMAS = [
     {
         "name": "list_runs",
-        "description": "List all experiment runs with state, config overrides and headline metrics, plus how many launches are left in the budget.",
+        "description": "List all runs of this study with state, overrides, PESQ, latency and rtf, plus the base config, "
+                       "launches left in the budget and free parallel slots.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "launch_run",
-        "description": "Start one training + evaluation run in the background with the baseline config plus overrides. "
-                       "Only one run can be active. A human may decline the launch. "
+        "description": "Start one training + evaluation run in the background with the base config plus overrides. "
+                       "Several runs can be active up to the parallel limit. A human may decline the launch. "
+                       "hop must be at most n_fft/2. "
                        f"Changeable keys and ranges: {json.dumps({k: (v[1] if isinstance(v[1], list) else [v[1], v[2]]) for k, v in ALLOWED.items()})}.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "short descriptive name, e.g. 'hidden384'"},
-                "overrides": {"type": "object", "description": "config keys to change, e.g. {\"hidden\": 384}"},
+                "name": {"type": "string", "description": "short descriptive name, e.g. 'w256-h64-s1'"},
+                "overrides": {"type": "object", "description": "config keys to change, e.g. {\"n_fft\": 256, \"hop\": 64}"},
                 "reason": {"type": "string", "description": "the hypothesis this run tests, shown to the human"},
             },
             "required": ["name", "overrides", "reason"],
@@ -212,7 +299,8 @@ SCHEMAS = [
     },
     {
         "name": "compare_runs",
-        "description": "Compare finished runs against a baseline run: PESQ, STOI, SI-SDR with deltas, and streaming latency.",
+        "description": "Compare finished runs against a baseline run: PESQ, STOI, SI-SDR with deltas, algorithmic latency, "
+                       "rtf and params per run, and 'groups' that pool runs differing only in seed (mean and std).",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -223,8 +311,19 @@ SCHEMAS = [
         },
     },
     {
+        "name": "plot_tradeoff",
+        "description": "Save a PNG of PESQ (mean and std over seeds) against algorithmic latency for the given runs, "
+                       "with the best-so-far front among configs with rtf < 0.1. Returns the path and the front.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"run_ids": {"type": "array", "items": {"type": "string"}}, "title": {"type": "string"}},
+            "required": ["run_ids"],
+        },
+    },
+    {
         "name": "write_report",
-        "description": "Save the final Markdown report for the human: goal, what was tried and why, a results table, failures and their diagnosis, and a recommendation.",
+        "description": "Save the final Markdown report for the human: question, what was tried and why, a results table, "
+                       "the trade-off plot (link tradeoff.png), failures and their diagnosis, and the answer.",
         "input_schema": {
             "type": "object",
             "properties": {"title": {"type": "string"}, "markdown": {"type": "string"}},

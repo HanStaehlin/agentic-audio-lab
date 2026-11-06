@@ -28,12 +28,14 @@ def speech_scores(est, ref, sr):
 
 @torch.no_grad()
 def streaming_latency(model, sr, frames=2000):
-    """Time one hop of streaming inference on CPU, batch 1.
+    """Time one hop of streaming inference on one CPU thread, batch 1.
 
     Returns compute time per hop, the real-time factor (compute / hop duration;
     below 1 means faster than real time) and the algorithmic latency (one window).
     """
     model = model.to("cpu").eval()
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)  # one core, closer to an embedded target than a many-core server
     bins = model.n_fft // 2 + 1
     frame = torch.rand(1, 1, bins)
     state = None
@@ -43,6 +45,7 @@ def streaming_latency(model, sr, frames=2000):
     for _ in range(frames):
         _, state = model.mask(frame, state)
     per_hop = (time.perf_counter() - start) / frames
+    torch.set_num_threads(threads)
     hop_s = model.hop / sr
     return {
         "ms_per_hop": per_hop * 1e3,

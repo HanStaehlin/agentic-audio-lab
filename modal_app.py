@@ -100,7 +100,7 @@ def _snapshot(run_dir, names):
     return out
 
 
-@app.function(image=image, gpu="T4", volumes={"/vol": vol}, timeout=4 * 3600)
+@app.function(image=image, gpu="T4", cpu=8, volumes={"/vol": vol}, timeout=4 * 3600)
 def train_remote(cfg: dict, run_id: str):
     """Run audiolab.train on the GPU and stream the run files back every 15 s."""
     import json
@@ -119,7 +119,12 @@ def train_remote(cfg: dict, run_id: str):
                                  "--run-dir", str(run_dir)], stdout=out, stderr=subprocess.STDOUT, cwd="/root")
         while proc.poll() is None:
             time.sleep(15)
-            yield _snapshot(run_dir, ["train.log", "status.json"])
+            files = _snapshot(run_dir, ["train.log", "status.json"])
+            # a final state is only sent at the very end, after metrics.json; otherwise the agent
+            # can see "done" in the gap before the metrics arrive
+            if b'"state": "done"' in files.get("status.json", b"") or b'"state": "failed"' in files.get("status.json", b""):
+                files.pop("status.json")
+            yield files
     shutil.copytree(run_dir, f"/vol/runs/{run_id}", dirs_exist_ok=True)
     vol.commit()
     # status.json last, so the agent never sees "done" before metrics.json exists
