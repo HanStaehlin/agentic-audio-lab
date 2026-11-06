@@ -1,0 +1,138 @@
+
+[tool] list_runs {}
+
+[tool] launch_run {"name": "w512-sw5-s0", "overrides": {"spec_weight": 5}, "reason": "Hypothesis: adding a compressed multi-res spectral loss (low weight 5) to SI-SDR improves PESQ by penalizing spectral artifacts that SI-SDR ignores. 32 ms default arch, inference cost unchanged."}
+
+[tool] launch_run {"name": "w512-sw20-s0", "overrides": {"spec_weight": 20}, "reason": "Same hypothesis at mid weight 20, roughly balancing spectral loss vs SI-SDR dB scale; tests dose-response."}
+
+[tool] launch_run {"name": "w512-sw50-s0", "overrides": {"spec_weight": 50}, "reason": "High spectral weight 50: does PESQ keep rising, or does SI-SDR/STOI degrade once the spectral term dominates?"}
+
+[tool] launch_run {"name": "w512-pow03-s0", "overrides": {"feature": "pow0.3"}, "reason": "Hypothesis: power-law 0.3 compressed input features (vs log1p) give the GRU a better-conditioned input and improve PESQ, SI-SDR loss only. Isolates the feature effect."}
+
+[tool] wait_for_run {"run_id": "1106-120036-w512-sw5-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-120038-w512-sw20-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-120040-w512-sw50-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-120042-w512-pow03-s0", "timeout_minutes": 60}
+
+[tool] launch_run {"name": "w512-sw50-s1", "overrides": {"spec_weight": 50, "seed": 1}, "reason": "Second seed of the best single-seed result (sw50, +0.11 PESQ vs old mean) to check the gain is real rather than noise."}
+
+[tool] launch_run {"name": "w512-sw150-s0", "overrides": {"spec_weight": 150}, "reason": "PESQ rose monotonically 5->20->50; test whether it keeps rising at 150 or saturates/hurts SI-SDR once the spectral term dominates."}
+
+[tool] launch_run {"name": "w512-sw50-cos-s0", "overrides": {"spec_weight": 50, "lr_schedule": "cosine"}, "reason": "Hypothesis: cosine LR decay lets the model settle into a better minimum at the end of training (loss curves are still noisy at constant lr), adding PESQ on top of sw50."}
+
+[tool] launch_run {"name": "w512-sw50-20k-s0", "overrides": {"spec_weight": 50, "steps": 20000}, "reason": "Hypothesis: the model is undertrained at 10k steps; doubling to 20k on top of sw50 improves PESQ at no inference cost."}
+
+[tool] wait_for_run {"run_id": "1106-121016-w512-sw50-s1", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-121018-w512-sw150-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-121020-w512-sw50-cos-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-121022-w512-sw50-20k-s0", "timeout_minutes": 60}
+
+[tool] launch_run {"name": "w512-sw150-s1", "overrides": {"spec_weight": 150, "seed": 1}, "reason": "Second seed for sw150 (2.662 single seed) to confirm it beats sw50 (2.58 over 2 seeds) beyond noise."}
+
+[tool] launch_run {"name": "w512-sw400-s0", "overrides": {"spec_weight": 400}, "reason": "PESQ still rising at 150 with flat SI-SDR; test 400 to find where it saturates or SI-SDR/STOI start dropping."}
+
+[tool] launch_run {"name": "w512-sw1000-s0", "overrides": {"spec_weight": 1000}, "reason": "Upper end of range: spectral loss dominates SI-SDR almost entirely. Brackets the optimum; expect SI-SDR to degrade."}
+
+[tool] launch_run {"name": "w128-h32-hid128-L1-sw150-s0", "overrides": {"n_fft": 128, "hop": 32, "hidden": 128, "layers": 1, "spec_weight": 150}, "reason": "Early transfer check: does the spectral-loss gain hold for the 8 ms architecture (small, short window), whose multi-res spectral loss may interact differently? S
+
+[tool] wait_for_run {"run_id": "1106-122219-w512-sw150-s1", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-122221-w512-sw400-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-122223-w512-sw1000-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-122225-w128-h32-hid128-L1-sw150-s0", "timeout_minutes": 60}
+
+[tool] compare_runs {"baseline_id": "old-w128-h32-hid128-L1-s0", "run_ids": ["old-w128-h32-hid128-L1-s0", "old-w128-h32-hid128-L1-s1", "old-w128-h32-hid128-L1-s2", "1106-122225-w128-h32-hid128-L1-sw150-s0"]}
+
+[tool] get_run_status {"run_id": "1106-122225-w128-h32-hid128-L1-sw150-s0", "tail_lines": 40}
+
+[tool] launch_run {"name": "w512-sw400-s1", "overrides": {"spec_weight": 400, "seed": 1}, "reason": "Candidate recipe sw400 (2.730, SI-SDR flat). Second seed to confirm it beats sw150 (2.65 over 2 seeds)."}
+
+[tool] launch_run {"name": "w256-h64-sw400-s0", "overrides": {"n_fft": 256, "hop": 64, "spec_weight": 400}, "reason": "Transfer of candidate recipe sw400 to the 16 ms architecture (unchanged arch, so same inference cost). Expect a gain similar to 32 ms if the effect doesn't depend on window/model size."}
+
+[tool] launch_run {"name": "w128-h32-hid128-L1-sw400-s0", "overrides": {"n_fft": 128, "hop": 32, "hidden": 128, "layers": 1, "spec_weight": 400}, "reason": "sw150 gave no PESQ gain at 8 ms (single seed). Test whether the higher weight helps the small model, or whether the spectral loss just doesn't transfer to it."}
+
+[tool] launch_run {"name": "w128-h32-hid128-L1-sw50-s0", "overrides": {"n_fft": 128, "hop": 32, "hidden": 128, "layers": 1, "spec_weight": 50}, "reason": "Alternative hypothesis for 8 ms: the small model has limited capacity, so a lower weight balances better. Brackets the 8 ms optimum together with sw150/sw400."}
+
+[tool] wait_for_run {"run_id": "1106-122937-w512-sw400-s1", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-122939-w256-h64-sw400-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-122941-w128-h32-hid128-L1-sw400-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-122943-w128-h32-hid128-L1-sw50-s0", "timeout_minutes": 60}
+
+[tool] launch_run {"name": "w512-sw400-s2", "overrides": {"spec_weight": 400, "seed": 2}, "reason": "Confirmation: third seed of the chosen recipe (spec_weight 400) at 32 ms."}
+
+[tool] launch_run {"name": "w256-h64-sw400-s1", "overrides": {"n_fft": 256, "hop": 64, "spec_weight": 400, "seed": 1}, "reason": "Confirmation: second seed of sw400 at 16 ms (s0 gave 2.657 vs old 2.503)."}
+
+[tool] launch_run {"name": "w256-h64-sw400-s2", "overrides": {"n_fft": 256, "hop": 64, "spec_weight": 400, "seed": 2}, "reason": "Confirmation: third seed of sw400 at 16 ms."}
+
+[tool] launch_run {"name": "w128-h32-hid128-L1-sw400-30k-s0", "overrides": {"n_fft": 128, "hop": 32, "hidden": 128, "layers": 1, "spec_weight": 400, "steps": 30000}, "reason": "Hypothesis: the small 8 ms model fits the combined loss more slowly; 3x steps (training-only, cheap for this model) may unlock the spectral-l
+
+[tool] wait_for_run {"run_id": "1106-123907-w512-sw400-s2", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-123909-w256-h64-sw400-s1", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-123911-w256-h64-sw400-s2", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-123913-w128-h32-hid128-L1-sw400-30k-s0", "timeout_minutes": 60}
+
+[tool] launch_run {"name": "w128-h32-hid128-L1-sw400-30k-s1", "overrides": {"n_fft": 128, "hop": 32, "hidden": 128, "layers": 1, "spec_weight": 400, "steps": 30000, "seed": 1}, "reason": "Confirmation seed 1 of the 8 ms recipe (sw400 + 30k steps; s0 gave 2.638 vs old 2.450)."}
+
+[tool] launch_run {"name": "w128-h32-hid128-L1-sw400-30k-s2", "overrides": {"n_fft": 128, "hop": 32, "hidden": 128, "layers": 1, "spec_weight": 400, "steps": 30000, "seed": 2}, "reason": "Confirmation seed 2 of the 8 ms recipe."}
+
+[tool] launch_run {"name": "w128-h32-hid128-L1-sw0-30k-s0", "overrides": {"n_fft": 128, "hop": 32, "hidden": 128, "layers": 1, "steps": 30000}, "reason": "Ablation: is the 8 ms gain from more steps alone (SI-SDR only, 30k) or from steps + spectral loss together? Single seed, so only a large difference is interpretabl
+
+[tool] launch_run {"name": "w256-h64-sw400-30k-s0", "overrides": {"n_fft": 256, "hop": 64, "spec_weight": 400, "steps": 30000}, "reason": "Exploratory: does 30k steps also lift the 16 ms model on top of sw400 (2.62 over 3 seeds at 10k)? Single seed, indicative for follow-up only."}
+
+[tool] wait_for_run {"run_id": "1106-125014-w128-h32-hid128-L1-sw400-30k-s1", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-125016-w128-h32-hid128-L1-sw400-30k-s2", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-125018-w128-h32-hid128-L1-sw0-30k-s0", "timeout_minutes": 60}
+
+[tool] wait_for_run {"run_id": "1106-125020-w256-h64-sw400-30k-s0", "timeout_minutes": 60}
+
+[tool] compare_runs {"baseline_id": "old-ref-w512-h128", "run_ids": ["old-ref-w512-h128", "old-ref-w512-h128-s1", "old-ref-w512-h128-s2", "old-w128-h32-hid128-L1-s0", "old-w128-h32-hid128-L1-s1", "old-w128-h32-hid128-L1-s2", "old-w256-h64-hid256-s0", "old-w256-h64-hid256-s1", "old-w256-h64-hid256-s2", "1106-120036-w512
+
+[tool] plot_tradeoff {"run_ids": ["old-ref-w512-h128", "old-ref-w512-h128-s1", "old-ref-w512-h128-s2", "old-w128-h32-hid128-L1-s0", "old-w128-h32-hid128-L1-s1", "old-w128-h32-hid128-L1-s2", "old-w256-h64-hid256-s0", "old-w256-h64-hid256-s1", "old-w256-h64-hid256-s2", "1106-120036-w512-sw5-s0", "1106-120038-w512-sw20-s0"
+
+[tool] write_report {"title": "Training-only recipe for the causal GRU enhancer: a spectral loss raises the PESQ\u2013latency front", "markdown": "## Question\nCan training-only changes raise the PESQ\u2013latency Pareto front without changing inference cost? Each budget keeps its architecture (n_fft, hop, hidden, laye
+
+[agent] Adding the spectral loss at a much higher weight than you suggested, `spec_weight=400`, raised the front at all three latency budgets. For the 8 ms model it only works if training also runs for 30k steps. Architectures are unchanged, so inference cost is the same.
+
+| Budget | Old PESQ | New PESQ | Seeds | SI-SDR change |
+|---|---|---|---|---|
+| 8 ms (sw400 + 30k steps) | 2.450 ± 0.047 | 2.574 ± 0.091 | 2 | −0.6 dB |
+| 16 ms (sw400) | 2.503 ± 0.016 | 2.621 ± 0.036 | 3 | −0.45 dB |
+| 32 ms (sw400) | 2.470 ± 0.003 | 2.694 ± 0.045 | 3 | −0.13 dB |
+
+- **32 ms and 16 ms:** the gain is confirmed. Every new seed beats every old seed.
+- **8 ms:** the gain is likely but not confirmed, because only 2 seeds finished and they differ a lot (2.638 and 2.510).
+- **Trade-off:** STOI rises slightly at every budget. SI-SDR drops, by about half a dB at the two smaller budgets.
+
+**What worked and what didn't:**
+- **Weight:** the suggested 5–50 range was too low. PESQ kept rising up to at least 400. One seed at 1000 gave 2.777, so the best weight may be higher, but that's unconfirmed.
+- **No effect:** `pow0.3` (2.464), cosine schedule and 20k steps on the 32 ms model.
+- **8 ms:** at 10k steps the spectral loss gave no gain at any weight. Only with 30k steps did it help. A one-seed run with 30k steps and no spectral loss gave 2.422, which suggests the gain needs both changes together.
+
+**Failures:**
+- **Preemption:** two runs were cut off by an infrastructure error (`RemoteError … preemption`) with training going normally. One was the third 8 ms seed, the other was testing 30k steps at 16 ms. The budget was used up, so I couldn't rerun them.
+- **rtf:** two runs measured rtf above 0.1 (0.113 and 0.125). Their models are identical to runs that measured 0.07–0.095, so I put this down to timing noise from 4 jobs sharing the CPU. Even on clean measurements the 16 ms model sits at about 0.09–0.097, so it has little headroom under the 0.1 budget.
+- **Plot:** the trade-off plot's automatic front differs from the confirmed numbers above. At 32 ms it picks the single-seed weight-1000 run. At 16 ms it falls back to the old model because it scores the new one by its worst timing (0.125).
+
+**Next steps:**
+1. A third seed for the 8 ms recipe.
+2. Three seeds of weight 1000 at 32 ms.
+3. 30k steps at 16 ms.
+4. Re-timing the 16 ms model on an idle machine.
+
+The report is at `reports/objective/20261106-130954.md` and links the plot at `reports/objective/tradeoff.png`.

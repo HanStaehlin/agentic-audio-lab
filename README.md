@@ -13,25 +13,36 @@ Shrinking the window lowers latency but also frequency resolution, and smaller h
 
 ## Answer
 
-![Quality vs. latency: Pareto front](results/latency/pareto.png)
+![Quality vs. latency, before and after the training study](results/pareto.png)
 
-*Each point is a model configuration that runs below 10% of one CPU core. The orange staircase is the Pareto front: no configuration has both lower latency and higher quality than the points on it. Plot: `python scripts/plot_pareto.py`, from [runs.csv](results/latency/runs.csv).*
+*Each line is a Pareto front: the best quality available at or below a given latency. Grey: the best models from study 1, trained with SI-SDR only. Orange: the same models after study 2 changed only their training. Plot: `python scripts/plot_pareto.py`.*
 
-Best configuration per latency budget, with rtf < 0.1, 3 seeds each, on the full VoiceBank-DEMAND test set (824 files):
+| Latency | Model (rtf < 0.1) | Study 1: SI-SDR loss | Study 2: + spectral loss | Gain |
+|---|---|---|---|---|
+| 8 ms | hop 2 ms, 1 GRU layer × 128 | 2.450 ± 0.047 | **2.574 ± 0.091** (2 seeds, 30k steps) | +0.12 |
+| 16 ms | hop 4 ms, 2 layers × 256 | 2.503 ± 0.016 | **2.621 ± 0.036** | +0.12 |
+| 32 ms | hop 8 ms, 2 layers × 256 | 2.470 ± 0.003 | **2.694 ± 0.045** | +0.22 |
 
-| Latency budget | Best configuration | PESQ (mean ± std) | STOI | SI-SDR | rtf |
-|---|---|---|---|---|---|
-| 8 ms | hop 2 ms, 1 GRU layer × 128 | 2.450 ± 0.047 | 0.932 | 17.5 dB | 0.070–0.079 |
-| 16 ms | hop 4 ms, 2 layers × 256 | **2.503 ± 0.016** | 0.936 | 18.6 dB | 0.089–0.097 |
-| 32 ms | hop 8 ms, 2 layers × 256 (default) | 2.470 ± 0.003 | 0.934 | 18.8 dB | 0.04–0.05 |
-| *noisy input* | | *1.97* | *0.921* | *8.4 dB* | |
+PESQ (wideband) on the full VoiceBank-DEMAND test set (824 files; the noisy input scores 1.97), mean ± std over 3 seeds unless noted.
 
-- **16 ms costs nothing compared with 32 ms.** The 16 ms model is better on every seed: its worst seed (2.485) beats the best 32 ms seed (2.472).
-- **Going to 8 ms costs about 0.05 PESQ.** That is suggestive only, because the 8 ms seeds vary a lot (std 0.047).
-- **The hop size matters more than the window.** At 16 ms a 4 ms hop beats an 8 ms hop by 0.08 PESQ, and at 8 ms a 2 ms hop beats a 4 ms hop by 0.12. GRU width barely mattered.
-- **At 8 ms, compute is the limit, not frequency resolution.** Each GRU layer costs about 0.1 ms per frame whatever its width. At a 2 ms hop that leaves room for only one layer. Two layers reach 2.50 PESQ, as good as 16 ms, but at rtf 0.13. Cheaper per-frame inference (a fused or exported GRU step) is therefore the most promising next step.
+**What the agent found:**
 
-Details, failures and next steps are in the agent's own report: [results/latency/report.md](results/latency/report.md). All 21 runs, including each run's hypothesis, are listed in [results/latency/runs.csv](results/latency/runs.csv), and the agent's tool calls in [results/latency/agent_transcript.txt](results/latency/agent_transcript.txt).
+1. **Study 1, the architecture** ([report](results/latency/report.md), 20 runs):
+   - **The hop size matters more than the window.** At 16 ms a 4 ms hop beat an 8 ms hop by 0.08 PESQ. At 8 ms a 2 ms hop beat a 4 ms hop by 0.12. GRU width barely mattered.
+   - **At 8 ms, compute is the limit.** Each GRU layer costs about 0.1 ms per frame whatever its width, so at a 2 ms hop only one layer fits the budget.
+   - **With SI-SDR training, 32 ms was no better than 16 ms.** The agent noticed that SI-SDR kept improving with latency while PESQ did not, and suggested the loss as the next lever.
+2. **Study 2, the training** ([report](results/objective/report.md), 24 runs):
+   - **Adding a compressed multi-resolution spectral loss raised PESQ on every budget**, with no change to the models or their inference cost.
+   - **The weight mattered.** PESQ kept rising up to the largest weight tried. The weight range I suggested (5 to 50) was too low; the agent found this by bracketing upward.
+   - **Compressed input features and a cosine schedule did nothing.** The small 8 ms model needed the spectral loss *and* 3× longer training; either alone did not help.
+   - **With the better loss, latency now buys quality: 8 → 16 → 32 ms gives 2.57 → 2.62 → 2.69.** At 16 and 32 ms every new seed beats every old seed. The 8 ms gain rests on 2 seeds, because one run was preempted.
+
+**Open points the agent listed:**
+- a third seed at 8 ms;
+- testing larger loss weights with seeds (one seed at weight 1000 reached 2.78 at 32 ms);
+- re-timing the 16 ms model on an idle machine, because it sits close to the rtf limit.
+
+All runs with their hypotheses: [study 1](results/latency/runs.csv), [study 2](results/objective/runs.csv). The agent's tool calls are in [study 1](results/latency/agent_transcript.txt) and [study 2](results/objective/agent_transcript.txt).
 
 ## How the agent works
 
@@ -58,7 +69,7 @@ you: goal, budget ──► agent (Claude, tool-use loop) ──► tools ──
 
 **What went wrong during the study, and who fixed it:**
 - **Rate limit:** 4 of 20 launches hit Modal's app-creation rate limit when 4 runs started at once.
-- **Preemption:** one run was preempted by the platform.
+- **Preemption:** three runs across both studies were preempted by the platform.
 - **The agent's response:** it diagnosed every case as an infrastructure failure rather than a bad config, relaunched the runs it needed, and chose not to relaunch one that no longer mattered for the answer.
 - **My fix:** during the study I added a retry with backoff for the rate limit.
 - **An earlier bug:** in an earlier round, a race condition let the agent see a finished run before its metrics had arrived. The agent noticed the missing metrics and refused to draw conclusions from that run. I then fixed the race.
@@ -88,8 +99,8 @@ audiolab/model.py     MaskGRU
 audiolab/metrics.py   PESQ, STOI, SI-SDR, streaming latency
 modal_app.py          Modal image, data volume, GPU function
 configs/              baseline and latency-study configs
-results/latency/      Pareto plot, the agent's report and plot, run table, agent transcript
-scripts/plot_pareto.py  Pareto plot from runs.csv
+results/              Pareto plot; per study: the agent's report and plot, run table, agent transcript
+scripts/plot_pareto.py  the Pareto plot, from the run tables
 ```
 
 ## Run it
@@ -109,6 +120,6 @@ Locally on one GPU or CPU, use `--backend local` with `audiolab.train` in place 
 
 ## Limitations
 
-- **One dataset and one training recipe.** All runs use 10k steps; the larger-context models may be undertrained.
+- **One dataset.** All results are on VoiceBank-DEMAND.
 - **rtf is measured on one thread of a cloud CPU.** That is not the target device, and identical configs varied by about ±10%. The 16 ms winner sits at rtf 0.089–0.097, close to the limit.
 - **PESQ, STOI and SI-SDR are objective proxies.** There was no listening test.

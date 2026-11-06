@@ -1,105 +1,98 @@
-"""Pareto plot of the latency study (PESQ against latency), from results/latency/runs.csv.
+"""Pareto plot: speech quality (PESQ) against latency, before and after the training-recipe study.
 
     python scripts/plot_pareto.py
 
-Only configs that meet the compute budget (rtf < 0.1) can be on the front. A config is on the
-front if no other config has lower or equal latency and higher or equal PESQ (and is better in one).
+Reads results/latency/runs.csv (before: SI-SDR loss only) and results/objective/runs.csv
+(after: SI-SDR + compressed spectral loss). Each budget keeps its architecture, so the compute
+cost (rtf) of a point does not change between before and after.
 """
 import csv
-from collections import defaultdict
 from pathlib import Path
 from statistics import mean, stdev
 
 import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parent.parent
-RUNS = ROOT / "results" / "latency" / "runs.csv"
-OUT = ROOT / "results" / "latency" / "pareto.png"
-RTF_BUDGET = 0.1
+OUT = ROOT / "results" / "pareto.png"
 NOISY_PESQ = 1.97
-COLORS = {8.0: "#d62728", 16.0: "#1f77b4", 32.0: "#7f7f7f"}
+
+# the architecture chosen per latency budget in the latency study (rtf < 0.1)
+ARCH = {8: dict(n_fft=128, hop=32, hidden=128, layers=1),
+        16: dict(n_fft=256, hop=64, hidden=256, layers=2),
+        32: dict(n_fft=512, hop=128, hidden=256, layers=2)}
+# the training recipe the agent confirmed per budget in the objective study
+RECIPE = {8: dict(spec_weight=400.0, steps=30000), 16: dict(spec_weight=400.0, steps=10000),
+          32: dict(spec_weight=400.0, steps=10000)}
 
 
-def load_configs():
-    groups = defaultdict(list)
-    for r in csv.DictReader(RUNS.open()):
-        if r["state"] != "done":
-            continue
-        key = (float(r["latency_ms"]), int(r["hop"]), int(r["hidden"]), int(r["layers"]))
-        groups[key].append(r)
-    configs = []
-    for (lat, hop, hidden, layers), rows in groups.items():
-        pesq = [float(r["pesq"]) for r in rows]
-        configs.append({
-            "latency": lat, "hop_ms": hop / 16, "hidden": hidden, "layers": layers,
-            "pesq": mean(pesq), "std": stdev(pesq) if len(pesq) > 1 else 0.0, "seeds": len(pesq),
-            "rtf": mean(float(r["rtf"]) for r in rows),
-        })
-    return configs
+def rows(path):
+    return [r for r in csv.DictReader(path.open()) if r["state"] == "done"]
 
 
-def front(points, x, y):
-    """Configs not dominated when lower x and higher y are better, sorted by x."""
-    keep = [p for p in points
-            if not any(q is not p and q[x] <= p[x] and q[y] >= p[y] and (q[x] < p[x] or q[y] > p[y])
-                       for q in points)]
-    return sorted(keep, key=lambda p: p[x])
+def matches(r, **want):
+    return all(float(r[k]) == float(v) for k, v in want.items())
 
 
-def staircase(ax, pts, x, y, x_max, color):
-    xs, ys = [], []
-    for i, p in enumerate(pts):
-        xs += [p[x]] if i == 0 else [p[x], p[x]]
-        ys += [p[y]] if i == 0 else [pts[i - 1][y], p[y]]
-    xs.append(x_max)
-    ys.append(pts[-1][y])
-    ax.plot(xs, ys, color=color, lw=2, zorder=2, solid_joinstyle="miter")
-    ax.fill_between(xs, ys, 0, color=color, alpha=0.05, zorder=1)
-
-
-def name(c):
-    return f"{c['layers']}×{c['hidden']} GRU, hop {c['hop_ms']:g} ms"
+def point(rs):
+    pesq = [float(r["pesq"]) for r in rs]
+    return mean(pesq), (stdev(pesq) if len(pesq) > 1 else 0.0), len(pesq)
 
 
 def main():
-    configs = load_configs()
-    ok = [c for c in configs if c["rtf"] < RTF_BUDGET]
-    pf = front(ok, "latency", "pesq")
-    ref = next(c for c in ok if c["latency"] == 32 and c["hop_ms"] == 8 and c["hidden"] == 256)
+    before_rows = rows(ROOT / "results" / "latency" / "runs.csv")
+    after_rows = rows(ROOT / "results" / "objective" / "runs.csv")
+    lats = sorted(ARCH)
+    before = {l: point([r for r in before_rows if matches(r, **ARCH[l])]) for l in lats}
+    after = {l: point([r for r in after_rows if matches(r, **ARCH[l], **RECIPE[l])]) for l in lats}
 
     plt.rcParams.update({"font.size": 11})
-    fig, ax = plt.subplots(figsize=(7, 4.4))
-    staircase(ax, pf, "latency", "pesq", 40, "#ff7f0e")
-    others = [c for c in ok if c not in pf and c is not ref]
-    ax.scatter([c["latency"] for c in others], [c["pesq"] for c in others], s=30, color="#c4c4c4",
-               zorder=3, label="other configurations")
-    for c in pf:
-        ax.errorbar(c["latency"], c["pesq"], yerr=c["std"], fmt="o", ms=11, color="#ff7f0e",
-                    mec="black", capsize=5, zorder=4)
-        ax.annotate(f"{c['pesq']:.2f}", (c["latency"], c["pesq"]), xytext=(12, -4),
-                    textcoords="offset points", fontsize=12, weight="bold")
-    ax.scatter(ref["latency"], ref["pesq"], s=60, color="white", edgecolor="#555555", lw=1.5, zorder=4)
-    ax.annotate(f"usual 32 ms window: {ref['pesq']:.2f}\nworse and slower than 16 ms",
-                (ref["latency"], ref["pesq"]), xytext=(-18, -2), textcoords="offset points", va="center",
-                ha="right", fontsize=9, color="#444444",
-                arrowprops={"arrowstyle": "-", "color": "#888888", "lw": 0.8})
-    ax.errorbar([], [], yerr=[], fmt="o", ms=9, color="#ff7f0e", mec="black", capsize=4,
-                label="best trade-off (mean ± std, 3 seeds)")
-    ax.legend(fontsize=9, loc="lower right", frameon=False)
+    fig, ax = plt.subplots(figsize=(7, 4.6))
+    for data, color, label, z in ((before, "#9e9e9e", "SI-SDR loss only (before)", 2),
+                                  (after, "#ff7f0e", "+ spectral loss (after)", 3)):
+        # Pareto staircase: best quality available at or below each latency
+        xs, ys, best = [], [], 0.0
+        for l in lats:
+            if data[l][0] > best:
+                if xs:
+                    xs.append(l)
+                    ys.append(best)
+                best = data[l][0]
+                xs.append(l)
+                ys.append(best)
+        xs.append(44)
+        ys.append(best)
+        ax.plot(xs, ys, color=color, lw=2.2, zorder=z, label=label)
+        for l in lats:
+            m, s, n = data[l]
+            ax.errorbar(l, m, yerr=s, fmt="o", ms=10, color=color, mec="black" if color != "#9e9e9e" else "none",
+                        capsize=4, zorder=z + 1)
+    for l in lats:
+        m, s, n = after[l]
+        ax.annotate(f"{m:.2f}", (l, m), xytext=(-12, 0), textcoords="offset points",
+                    ha="right", va="center", fontsize=12, weight="bold")
+        gain = m - before[l][0]
+        ax.annotate(f"+{gain:.2f}", (l, (m + before[l][0]) / 2), xytext=(12, 0), textcoords="offset points",
+                    va="center", fontsize=9, color="#cc6600")
     ax.set_xscale("log", base=2)
-    ax.set_xticks([8, 16, 32], ["8 ms", "16 ms", "32 ms"])
+    ax.set_xticks(lats, [f"{l} ms" for l in lats])
     ax.minorticks_off()
-    ax.set_xlim(6.5, 40)
-    ax.set_ylim(2.30, 2.55)
-    ax.set_xlabel("latency (STFT window)  \u2190 better")
-    ax.set_ylabel("speech quality (PESQ)  better \u2192")
+    ax.set_xlim(6.5, 44)
+    ax.set_ylim(2.35, 2.85)
+    ax.set_xlabel("latency (STFT window)   ← better")
+    ax.set_ylabel("speech quality (PESQ)   better →")
     ax.set_title("Quality vs. latency of a real-time speech enhancer", fontsize=12, pad=10)
+    ax.legend(fontsize=9, loc="upper left", frameon=False)
     ax.grid(alpha=0.25)
     ax.spines[["top", "right"]].set_visible(False)
-    fig.text(0.01, -0.02, f"VoiceBank-DEMAND, 824 test files (noisy input: PESQ {NOISY_PESQ}). "
-             "Shown: configurations that run below 10% of one CPU core (rtf < 0.1).", fontsize=8, color="#666666")
+    fig.text(0.01, -0.08, f"VoiceBank-DEMAND, 824 test files (noisy input: PESQ {NOISY_PESQ}). Mean ± std over seeds "
+             "(3; 2 at 8 ms after).\nSame model sizes before and after, chosen to run below 10% of one CPU core "
+             "(rtf < 0.1). Only training changed\n(spectral loss; 30k instead of 10k steps at 8 ms).",
+             fontsize=8, color="#666666")
     fig.savefig(OUT, dpi=180, bbox_inches="tight")
-    print("saved", OUT.relative_to(ROOT), "front:", [(c["latency"], round(c["pesq"], 3)) for c in pf])
+    for l in lats:
+        print(f"{l} ms: before {before[l][0]:.3f}±{before[l][1]:.3f} (n={before[l][2]}), "
+              f"after {after[l][0]:.3f}±{after[l][1]:.3f} (n={after[l][2]})")
+    print("saved", OUT.relative_to(ROOT))
 
 
 if __name__ == "__main__":
