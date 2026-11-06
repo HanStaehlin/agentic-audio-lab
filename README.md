@@ -13,7 +13,9 @@ Shrinking the window lowers latency but also frequency resolution, and smaller h
 
 ## Answer
 
-![PESQ vs algorithmic latency](results/latency/tradeoff.png)
+![Pareto fronts: PESQ vs latency and vs compute](results/latency/pareto.png)
+
+*Left: configurations that meet the compute budget; the orange staircase is the Pareto front (no other configuration has both lower latency and higher PESQ). Right: the same configurations against compute, coloured by window length. Plot: `python scripts/plot_pareto.py`, from [runs.csv](results/latency/runs.csv).*
 
 Best configuration per latency budget, with rtf < 0.1, 3 seeds each, on the full VoiceBank-DEMAND test set (824 files):
 
@@ -86,7 +88,8 @@ audiolab/model.py     MaskGRU
 audiolab/metrics.py   PESQ, STOI, SI-SDR, streaming latency
 modal_app.py          Modal image, data volume, GPU function
 configs/              baseline and latency-study configs
-results/latency/      plot, report, run table, agent transcript
+results/latency/      Pareto plot, the agent's report and plot, run table, agent transcript
+scripts/plot_pareto.py  Pareto plot from runs.csv
 ```
 
 ## Run it
